@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Cámara Fullscreen (MP4 si es posible)</title>
+<meta name="viewport"
+      content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: black; overflow: hidden;
+  }
+  #camera {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    object-fit: cover; /* llena sin deformar (sólo visual) */
+    background: black;
+  }
+  .controls {
+    position: fixed; bottom: 20px; left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 14px; z-index: 10;
+  }
+  button {
+    width: 72px; height: 72px; border-radius: 50%;
+    border: none; font-weight: bold; color: white; cursor: pointer;
+  }
+  .start { background: #16a34a; }
+  .stop  { background: #dc2626; }
+  .save  { background: #2563eb; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<video id="camera" autoplay playsinline muted></video>
+
+<div class="controls">
+  <button id="btnStart" class="start" onclick="startRecording()">REC</button>
+  <button id="btnStop"  class="stop"  onclick="stopRecording()" disabled>STOP</button>
+  <button id="btnSave"  class="save"  onclick="saveVideo()" disabled>SAVE</button>
+</div>
+
+<script>
+let stream;
+let recorder;
+let chunks = [];
+let recordedBlob = null;
+let chosenMime = 'video/webm';     // por defecto
+let chosenExt  = 'webm';           // extensión de archivo
+
+// Selecciona el mejor formato disponible en este navegador.
+// 1) Intentar MP4 (H.264 + AAC), típico de Safari/iOS.
+// 2) Si no, intentar WebM VP9/VP8.
+// Usa MediaRecorder.isTypeSupported() según la especificación/MDN.
+function pickBestMimeType() {
+  const candidates = [
+    { mime: 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', ext: 'mp4' }, // H.264 + AAC
+    { mime: 'video/mp4', ext: 'mp4' },                                 // MP4 genérico
+    { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+    { mime: 'video/webm', ext: 'webm' }
+  ];
+  if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+    for (const c of candidates) {
+      if (MediaRecorder.isTypeSupported(c.mime)) {
+        chosenMime = c.mime;
+        chosenExt  = c.ext;
+        break;
+      }
+    }
+  }
+}
+
+async function startRecording() {
+  chunks = [];
+  recordedBlob = null;
+
+  pickBestMimeType(); // decide MP4 o WebM según soporte real
+
+  // Pedimos calidad alta (el navegador elegirá lo máximo viable en el dispositivo)
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: "environment" },
+      width:     { ideal: 3840 },   // 4K si está disponible
+      height:    { ideal: 2160 },
+      frameRate: { ideal: 60 }
+    },
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl:  false
+    }
+  });
+
+  document.getElementById("camera").srcObject = stream;
+
+  // Sube el bitrate para evitar compresión excesiva.
+  // Si el navegador ignora alguno de estos parámetros, no pasa nada.
+  recorder = new MediaRecorder(stream, {
+    mimeType: chosenMime,
+    videoBitsPerSecond: 12_000_000,  // ~12 Mbps
+    audioBitsPerSecond: 192_000      // ~192 kbps
+  });
+
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.start();
+
+  btnStart.disabled = true;
+  btnStop.disabled  = false;
+  btnSave.disabled  = true;
+}
+
+function stopRecording() {
+  if (!recorder) return;
+  recorder.onstop = () => {
+    recordedBlob = new Blob(chunks, { type: chosenMime });
+    btnSave.disabled = false;
+  };
+  recorder.stop();
+  // Detiene cámara/micrófono
+  if (stream) stream.getTracks().forEach(track => track.stop());
+}
+
+function saveVideo() {
+  if (!recordedBlob) return;
+  const url = URL.createObjectURL(recordedBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `video.${chosenExt}`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+}
+</script>
+
+</body>
+</html>
