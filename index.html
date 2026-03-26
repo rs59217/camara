@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Cámara Fluida + Guardado Seguro</title>
+
+<meta name="viewport"
+      content="width=device-width,height=device-height,
+               initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: black;
+  overflow: hidden;
+  color: white;
+  font-family: system-ui, Arial, sans-serif;
+}
+
+video {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+}
+
+.hud {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.hud span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.6);
+}
+
+.controls {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  z-index: 10;
+}
+
+button {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: none;
+  font-weight: bold;
+  color: white;
+  cursor: pointer;
+}
+
+.preview { background: #475569; }
+.rec     { background: #16a34a; }
+.stop    { background: #dc2626; }
+.save    { background: #2563eb; }
+
+button:disabled {
+  opacity: 0.5;
+}
+</style>
+</head>
+
+<body>
+
+<video id="camera" autoplay playsinline muted></video>
+
+<div class="hud">
+  <span id="status">Listo</span>
+  <span id="timer">● 00:00</span>
+</div>
+
+<div class="controls">
+  <button class="preview" onclick="startCamera()">PREV</button>
+  <button id="recBtn"  class="rec"  disabled onclick="startRecording()">REC</button>
+  <button id="stopBtn" class="stop" disabled onclick="stopRecording()">STOP</button>
+  <button id="saveBtn" class="save" disabled onclick="openPreview()">SAVE</button>
+</div>
+
+<script>
+let stream, recorder, blob;
+let chunks = [];
+let recording = false;
+let timerId, seconds = 0;
+
+const cam = document.getElementById("camera");
+const status = document.getElementById("status");
+const timer = document.getElementById("timer");
+const recBtn = document.getElementById("recBtn");
+const stopBtn = document.getElementById("stopBtn");
+const saveBtn = document.getElementById("saveBtn");
+
+/* ========= TIMER ========= */
+function startTimer() {
+  seconds = 0;
+  timer.textContent = "● 00:00";
+  timerId = setInterval(() => {
+    seconds++;
+    const m = String(Math.floor(seconds / 60)).padStart(2, "0");
+    const s = String(seconds % 60).padStart(2, "0");
+    timer.textContent = `● ${m}:${s}`;
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerId);
+}
+
+/* ========= CAMERA (FLUIDO) ========= */
+async function startCamera() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 },
+      frameRate: { ideal: 60 }
+    },
+    audio: false
+  });
+
+  cam.srcObject = stream;
+  status.textContent = "Cámara lista";
+  recBtn.disabled = false;
+}
+
+/* ========= RECORD (30 FPS ESTABLE) ========= */
+function startRecording() {
+  chunks = [];
+  recording = true;
+
+  recorder = new MediaRecorder(stream, {
+    videoBitsPerSecond: 6_000_000  // 🔥 CLAVE PARA ELIMINAR LAG
+  });
+
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+
+  recorder.onstop = () => {
+    blob = new Blob(chunks, { type: recorder.mimeType });
+    saveBtn.disabled = false;
+    stopTimer();
+    status.textContent = "Grabación lista";
+  };
+
+  recorder.start();
+  startTimer();
+
+  recBtn.disabled = true;
+  stopBtn.disabled = false;
+  status.textContent = "Grabando…";
+}
+
+/* ========= STOP ========= */
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  recorder.stop();
+  stopBtn.disabled = true;
+  recBtn.disabled = false;
+}
+
+/* ========= OPEN NEW WINDOW WITH CONTROLS ========= */
+function openPreview() {
+  const url = URL.createObjectURL(blob);
+
+  const win = window.open("", "_blank");
+  win.document.write(`
+    <html>
+    <head>
+      <title>Video grabado</title>
+      <meta name="viewport" content="width=device-width,initial-scale=1.0">
+      <style>
+        body {
+          margin:0;
+          background:black;
+          display:flex;
+          justify-content:center;
+          align-items:center;
+          height:100vh;
+        }
+        video {
+          width:100%;
+          height:100%;
+          object-fit:contain;
+        }
+      </style>
+    </head>
+    <body>
+      <video src="${url}" controls autoplay></video>
+    </body>
+    </html>
+  `);
+}
+</script>
+
+</body>
+</html>
