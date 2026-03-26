@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Cámara Web Fullscreen Estable</title>
+
+<meta name="viewport"
+      content="width=device-width, height=device-height,
+               initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+<style>
+/* ===== BASE ===== */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: black;
+  overflow: hidden;
+  font-family: system-ui, Arial, sans-serif;
+  color: white;
+}
+
+/* ===== VIDEO ===== */
+#camera, #recordedPreview {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  background: black;
+}
+
+#recordedPreview {
+  display: none;
+  z-index: 20;
+}
+
+/* ===== HUD ===== */
+.hud {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.hud span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.6);
+}
+
+/* ===== CONTROLES ===== */
+.controls {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  z-index: 10;
+}
+
+button {
+  width: 52px;
+  height: 35px;
+  border-radius: 10%;
+  border: none;
+  font-weight: bold;
+  color: white;
+  cursor: pointer;
+}
+
+.preview { background: #002252; }
+.rec     { background: #006fab; }
+.stop    { background: #006fab; }
+.save    { background: #006fab; }
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>
+</head>
+
+<body>
+
+<!-- VIDEO EN VIVO -->
+<video id="camera" autoplay playsinline muted></video>
+
+<!-- PREVIEW PARA iOS / SAFARI -->
+<video id="recordedPreview" controls playsinline></video>
+
+<!-- HUD -->
+<div class="hud">
+  <span id="hudFormat">Formato: —</span>
+  <span id="hudInfo">Esperando…</span>
+</div>
+
+<!-- CONTROLES -->
+<div class="controls">
+  <button id="btnPreview" class="preview">PREV</button>
+  <button id="btnRec"     class="rec" disabled>🎦</button>
+  <button id="btnStop"    class="stop" disabled>⛔</button>
+  <button id="btnSave"    class="save" disabled>💾</button>
+</div>
+
+<script>
+/* ===== ELEMENTOS ===== */
+const cam = document.getElementById("camera");
+const preview = document.getElementById("recordedPreview");
+
+const btnPreview = document.getElementById("btnPreview");
+const btnRec     = document.getElementById("btnRec");
+const btnStop    = document.getElementById("btnStop");
+const btnSave    = document.getElementById("btnSave");
+
+const hudFormat = document.getElementById("hudFormat");
+const hudInfo   = document.getElementById("hudInfo");
+
+/* ===== ESTADO ===== */
+let stream = null;
+let recorder = null;
+let chunks = [];
+let blob = null;
+
+let mimeType = "video/webm";
+let ext = "webm";
+
+/* ===== DETECCIÓN iOS ===== */
+function isIOS() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+/* ===== FORMATO ÓPTIMO ===== */
+function chooseFormat() {
+  const formats = [
+    { type: 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', ext: 'mp4' },
+    { type: 'video/mp4', ext: 'mp4' },
+    { type: 'video/webm', ext: 'webm' }
+  ];
+
+  for (const f of formats) {
+    if (window.MediaRecorder?.isTypeSupported(f.type)) {
+      mimeType = f.type;
+      ext = f.ext;
+      return;
+    }
+  }
+}
+
+/* ===== PREVIEW CON PERFIL ESTABLE ===== */
+async function startPreview() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: "environment" } },
+    audio: false
+  });
+
+  cam.srcObject = stream;
+
+  const track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities?.();
+
+  let targetW = 1920, targetH = 1080, targetFPS = 60;
+
+  if (caps?.width?.max) {
+    if (caps.width.max >= 3840) {
+      targetW = 3840; targetH = 2160; targetFPS = 30;
+    } else if (caps.width.max >= 1920) {
+      targetW = 1920; targetH = 1080;
+      targetFPS = Math.min(60, caps.frameRate?.max || 60);
+    } else {
+      targetW = caps.width.max;
+      targetH = caps.height.max;
+      targetFPS = Math.min(30, caps.frameRate?.max || 30);
+    }
+
+    await track.applyConstraints({
+      width:     { ideal: targetW },
+      height:    { ideal: targetH },
+      frameRate: { ideal: targetFPS }
+    });
+  }
+
+  const s = track.getSettings();
+  hudInfo.textContent = `${s.width}×${s.height} @ ${Math.round(s.frameRate || targetFPS)}fps`;
+
+  btnRec.disabled = false;
+}
+
+/* ===== GRABAR ===== */
+function startRecording() {
+  chooseFormat();
+  chunks = [];
+  blob = null;
+
+  recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 10_000_000
+  });
+
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+
+  recorder.onstop = () => {
+    blob = new Blob(chunks, { type: mimeType });
+    btnSave.disabled = false;
+  };
+
+  recorder.start();
+
+  hudFormat.textContent = ext === "mp4" ? "Formato: MP4" : "Formato: WebM";
+  btnRec.disabled = true;
+  btnStop.disabled = false;
+}
+
+/* ===== DETENER ===== */
+function stopRecording() {
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+  btnStop.disabled = true;
+}
+
+/* ===== SAVE SIN ERRORES ===== */
+function saveVideo() {
+  if (!blob) {
+    alert("No hay video para guardar");
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+
+  /* iOS / Safari → Preview (forma correcta) */
+  if (isIOS()) {
+    cam.style.display = "none";
+    preview.src = url;
+    preview.style.display = "block";
+    return;
+  }
+
+  /* Android / PC → Descarga directa */
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `video_${Date.now()}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+  btnSave.disabled = true;
+  btnRec.disabled = false;
+}
+
+/* ===== EVENTOS ===== */
+btnPreview.onclick = startPreview;
+btnRec.onclick     = startRecording;
+btnStop.onclick    = stopRecording;
+btnSave.onclick    = saveVideo;
+</script>
+
+</body>
+</html>
