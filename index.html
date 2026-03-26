@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Cámara Web Fullscreen 60FPS</title>
+
+<meta name="viewport"
+      content="width=device-width, height=device-height,
+               initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+<style>
+/* =========================
+   BASE
+========================= */
+html, body {
+  margin: 0;
+  padding: 0;
+  width : 100%;
+  height: 100%;
+  background: black;
+  overflow: hidden;
+  font-family: system-ui, Arial, sans-serif;
+  color: white;
+}
+
+/* =========================
+   VIDEO EN VIVO
+========================= */
+#camera {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  background: black;
+}
+
+/* =========================
+   PREVIEW GRABADO (iOS)
+========================= */
+#recordedPreview {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: black;
+  display: none;
+  z-index: 20;
+}
+
+/* =========================
+   HUD
+========================= */
+.hud {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.hud span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.6);
+}
+
+/* =========================
+   CONTROLES
+========================= */
+.controls {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  z-index: 10;
+}
+
+button {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: none;
+  font-weight: bold;
+  color: white;
+  cursor: pointer;
+}
+
+.preview { background: #475569; }
+.rec     { background: #16a34a; }
+.stop    { background: #dc2626; }
+.save    { background: #2563eb; }
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>
+</head>
+
+<body>
+
+<!-- VIDEO EN VIVO -->
+<video id="camera" autoplay playsinline muted></video>
+
+<!-- PREVIEW DEL VIDEO GRABADO (fallback iOS) -->
+<video id="recordedPreview" controls playsinline></video>
+
+<!-- HUD -->
+<div class="hud">
+  <span id="hudFormat">Formato: —</span>
+  <span id="hudRes">Resolución: —</span>
+  <span id="hudFps">FPS: —</span>
+</div>
+
+<!-- CONTROLES -->
+<div class="controls">
+  <button id="btnPreview" class="preview">PREV</button>
+  <button id="btnRec"     class="rec" disabled>REC</button>
+  <button id="btnStop"    class="stop" disabled>STOP</button>
+  <button id="btnSave"    class="save" disabled>SAVE</button>
+</div>
+
+<script>
+/* =========================
+   REFERENCIAS
+========================= */
+const video        = document.getElementById("camera");
+const previewVideo = document.getElementById("recordedPreview");
+
+const btnPreview = document.getElementById("btnPreview");
+const btnRec     = document.getElementById("btnRec");
+const btnStop    = document.getElementById("btnStop");
+const btnSave    = document.getElementById("btnSave");
+
+const hudFormat = document.getElementById("hudFormat");
+const hudRes    = document.getElementById("hudRes");
+const hudFps    = document.getElementById("hudFps");
+
+/* =========================
+   ESTADO
+========================= */
+let stream;
+let recorder;
+let chunks = [];
+let recordedBlob = null;
+
+let mimeType = "video/webm";
+let fileExt  = "webm";
+
+/* =========================
+   DETECTAR iOS
+========================= */
+function isIOS() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+/* =========================
+   SELECCIÓN MP4 REAL
+========================= */
+function selectBestMimeType() {
+  const options = [
+    { mime: 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', ext: 'mp4' },
+    { mime: 'video/mp4', ext: 'mp4' },
+    { mime: 'video/webm', ext: 'webm' }
+  ];
+
+  for (const o of options) {
+    if (window.MediaRecorder?.isTypeSupported(o.mime)) {
+      mimeType = o.mime;
+      fileExt  = o.ext;
+      return;
+    }
+  }
+}
+
+/* =========================
+   PREVIEW + 60 FPS
+========================= */
+async function startPreview() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: "environment" },
+      frameRate: { ideal: 60, min: 30 }
+    },
+    audio: false
+  });
+
+  video.srcObject = stream;
+
+  const track = stream.getVideoTracks()[0];
+  const caps  = track.getCapabilities?.();
+
+  if (caps) {
+    await track.applyConstraints({
+      width:  { ideal: caps.width.max },
+      height: { ideal: caps.height.max },
+      frameRate: { ideal: Math.min(60, caps.frameRate.max) }
+    });
+  }
+
+  btnRec.disabled = false;
+  updateHUD();
+  startFPSMonitor();
+}
+
+/* =========================
+   GRABAR
+========================= */
+function startRecording() {
+  selectBestMimeType();
+
+  chunks = [];
+  recordedBlob = null;
+
+  recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 12_000_000
+  });
+
+  recorder.ondataavailable = e => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+
+  recorder.start();
+
+  btnRec.disabled  = true;
+  btnStop.disabled = false;
+  btnSave.disabled = true;
+
+  hudFormat.textContent =
+    fileExt === "mp4" ? "Formato: MP4 (H.264)" : "Formato: WebM";
+}
+
+/* =========================
+   DETENER
+========================= */
+function stopRecording() {
+  recorder.stop();
+
+  recorder.onstop = () => {
+    recordedBlob = new Blob(chunks, { type: mimeType });
+    btnSave.disabled = false;
+  };
+
+  btnStop.disabled = true;
+}
+
+/* =========================
+   SAVE / DOWNLOAD (FIX)
+========================= */
+function saveVideo() {
+  if (!recordedBlob) {
+    alert("No hay video para guardar.");
+    return;
+  }
+
+  const url = URL.createObjectURL(recordedBlob);
+
+  // Descarga directa (Android / PC)
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `video_${Date.now()}.${fileExt}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  // Fallback iOS → preview con controles
+  if (isIOS()) {
+    showRecordedPreview(url);
+  } else {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  btnRec.disabled  = false;
+  btnSave.disabled = true;
+}
+
+/* =========================
+   PREVIEW iOS
+========================= */
+function showRecordedPreview(url) {
+  previewVideo.src = url;
+  previewVideo.style.display = "block";
+  video.style.display = "none";
+
+  previewVideo.onended = () => {
+    previewVideo.style.display = "none";
+    video.style.display = "block";
+    URL.revokeObjectURL(url);
+  };
+}
+
+/* =========================
+   HUD
+========================= */
+function updateHUD() {
+  const s = stream.getVideoTracks()[0].getSettings();
+  hudRes.textContent = `Resolución: ${s.width}×${s.height}`;
+}
+
+function startFPSMonitor() {
+  let last = performance.now();
+  function frame() {
+    const now = performance.now();
+    hudFps.textContent = `FPS: ${Math.round(1000 / (now - last))}`;
+    last = now;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* =========================
+   EVENTOS
+========================= */
+btnPreview.onclick = startPreview;
+btnRec.onclick     = startRecording;
+btnStop.onclick    = stopRecording;
+btnSave.onclick    = saveVideo;
+</script>
+
+</body>
+</html>
