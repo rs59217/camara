@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Cámara Web Fullscreen</title>
+<title>Cámara Web Fullscreen Estable</title>
 
 <meta name="viewport"
       content="width=device-width, height=device-height,
@@ -95,15 +95,15 @@ button:disabled {
 <!-- HUD -->
 <div class="hud">
   <span id="hudFormat">Formato: —</span>
-  <span id="hudInfo">—</span>
+  <span id="hudInfo">Esperando…</span>
 </div>
 
-<!-- BOTONES -->
+<!-- CONTROLES -->
 <div class="controls">
   <button id="btnPreview" class="preview">PREV</button>
-  <button id="btnRec"     class="rec" disabled>REC</button>
-  <button id="btnStop"    class="stop" disabled>STOP</button>
-  <button id="btnSave"    class="save" disabled>SAVE</button>
+  <button id="btnRec"     class="rec" disabled>🎦</button>
+  <button id="btnStop"    class="stop" disabled>⛔</button>
+  <button id="btnSave"    class="save" disabled>💾</button>
 </div>
 
 <script>
@@ -143,7 +143,6 @@ function chooseFormat() {
     { type: 'video/mp4', ext: 'mp4' },
     { type: 'video/webm', ext: 'webm' }
   ];
-
   for (const f of formats) {
     if (window.MediaRecorder?.isTypeSupported(f.type)) {
       mimeType = f.type;
@@ -153,22 +152,45 @@ function chooseFormat() {
   }
 }
 
-/* ===== PREVIEW CAMARA ===== */
+/* ===== PREVIEW CON CALIDAD MÁXIMA ESTABLE ===== */
 async function startPreview() {
   stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: { ideal: "environment" },
-      frameRate: { ideal: 60 }
-    },
+    video: { facingMode: { ideal: "environment" } },
     audio: false
   });
 
   cam.srcObject = stream;
 
   const track = stream.getVideoTracks()[0];
-  const settings = track.getSettings();
+  const caps = track.getCapabilities?.();
 
-  hudInfo.textContent = `${settings.width}x${settings.height} @ ${settings.frameRate || "?"}fps`;
+  // Perfil equilibrado según capacidad real
+  let targetW = 1920, targetH = 1080, targetFPS = 60;
+
+  if (caps?.width?.max) {
+    if (caps.width.max >= 3840) {
+      targetW = 3840;
+      targetH = 2160;
+      targetFPS = 30; // 4K estable
+    } else if (caps.width.max >= 1920) {
+      targetW = 1920;
+      targetH = 1080;
+      targetFPS = Math.min(60, caps.frameRate?.max || 60);
+    } else {
+      targetW = caps.width.max;
+      targetH = caps.height.max;
+      targetFPS = Math.min(30, caps.frameRate?.max || 30);
+    }
+
+    await track.applyConstraints({
+      width:     { ideal: targetW },
+      height:    { ideal: targetH },
+      frameRate: { ideal: targetFPS }
+    });
+  }
+
+  const s = track.getSettings();
+  hudInfo.textContent = `${s.width}×${s.height} @ ${Math.round(s.frameRate || targetFPS)}fps`;
 
   btnRec.disabled = false;
 }
@@ -176,13 +198,12 @@ async function startPreview() {
 /* ===== GRABAR ===== */
 function startRecording() {
   chooseFormat();
-
   chunks = [];
   blob = null;
 
   recorder = new MediaRecorder(stream, {
     mimeType,
-    videoBitsPerSecond: 10_000_000
+    videoBitsPerSecond: 10_000_000 // Fluido ✔
   });
 
   recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
@@ -202,9 +223,7 @@ function startRecording() {
 
 /* ===== DETENER ===== */
 function stopRecording() {
-  if (recorder && recorder.state !== "inactive") {
-    recorder.stop();
-  }
+  if (recorder && recorder.state !== "inactive") recorder.stop();
   btnStop.disabled = true;
 }
 
@@ -217,7 +236,6 @@ function saveVideo() {
 
   const url = URL.createObjectURL(blob);
 
-  // Descarga directa
   const a = document.createElement("a");
   a.href = url;
   a.download = `video_${Date.now()}.${ext}`;
